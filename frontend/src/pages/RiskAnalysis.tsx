@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../AuthContext';
 import { api } from '../api';
 
 export default function RiskAnalysis() {
+  const { user } = useAuth();
   const [riskScores, setRiskScores] = useState<any[]>([]);
   const [formula, setFormula] = useState<any>(null);
   const [selectedTestCase, setSelectedTestCase] = useState<any>(null);
@@ -9,10 +11,11 @@ export default function RiskAnalysis() {
 
   useEffect(() => {
     async function load() {
+      if (!user?.token) return;
       try {
         const [scores, form] = await Promise.all([
-          api.getRiskScores(),
-          api.getRiskFormula()
+          api.getRiskScores(user.token),
+          api.getRiskFormula(user.token)
         ]);
         setRiskScores(scores);
         setFormula(form);
@@ -24,7 +27,7 @@ export default function RiskAnalysis() {
       }
     }
     load();
-  }, []);
+  }, [user]);
 
   if (loading) return <div className="loading">Calculating risk models and factors...</div>;
 

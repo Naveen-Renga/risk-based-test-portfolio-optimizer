@@ -11,6 +11,7 @@ from datetime import datetime
 router = APIRouter(prefix="/api/optimizer", tags=["optimizer"])
 
 class OptimizerRequest(BaseModel):
+    token: str
     time_budget_minutes: float = 60.0
     objective: str = "max_risk"  # max_risk or max_efficiency
     mandatory_only: bool = False
@@ -32,12 +33,22 @@ class OverrideRequest(BaseModel):
 
 @router.post("/run")
 def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
+    # BUG 3 FIX: Require tester or higher role
+    user = require_role(req.token, ["tester", "test_lead", "admin"])
+
     test_cases = db.query(TestCase).filter(TestCase.current_status == "Active").all()
 
-    # Calculate risk scores for all test cases
+    # BUG 5 FIX: Fetch active priority overrides from OverrideLog
+    # Get the latest override log for each test_case_id
+    all_overrides = db.query(OverrideLog).order_by(OverrideLog.timestamp.asc()).all()
+    active_overrides = {}
+    for ov in all_overrides:
+        active_overrides[ov.test_case_id] = ov.new_priority
+
+    # Calculate risk scores for all test cases (passing db to compute real defect count)
     scored = []
     for tc in test_cases:
-        risk = calculate_risk_score(tc)
+        risk = calculate_risk_score(tc, db=db)
         scored.append({
             "test_case_id": tc.test_case_id,
             "name": tc.name,
@@ -48,26 +59,37 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
             "is_mandatory": tc.is_mandatory,
             "business_criticality": tc.business_criticality,
             "historical_defect_count": tc.historical_defect_count,
-            "historical_critical_defect_count": tc.historical_critical_defect_count,
+            "historical_critical_defect_count": risk["actual_critical_defect_count"],
             "production_usage": tc.production_usage,
             "change_risk": tc.change_risk,
             "network_risk": tc.network_risk,
             "unusual_behaviour_risk": tc.unusual_behaviour_risk,
+            "has_override": tc.test_case_id in active_overrides,
+            "override_new_priority": active_overrides.get(tc.test_case_id),
             **risk
         })
 
-    # Sort by objective
-    if req.objective == "max_efficiency":
-        scored.sort(key=lambda x: x["efficiency_score"], reverse=True)
-    else:
-        scored.sort(key=lambda x: x["risk_score"], reverse=True)
+    # BUG 5 FIX: Incorporate active overrides into candidate ranking.
+    # If a test case has an active override specifying a target priority (e.g. 1),
+    # we boost its sorting key so it moves up to that relative position.
+    def get_sort_key(item):
+        if item["has_override"]:
+            # A lower new_priority number means higher priority. Give it a massive boost based on target rank.
+            target_rank = item["override_new_priority"]
+            # Inverse ranking boost so lower target_rank gives higher sort score
+            return (1000 - target_rank, item["risk_score"] if req.objective == "max_risk" else item["efficiency_score"])
+        base_metric = item["efficiency_score"] if req.objective == "max_efficiency" else item["risk_score"]
+        return (0, base_metric)
 
-    # Apply soft constraint preferences as secondary sorting tiebreakers
+    scored.sort(key=get_sort_key, reverse=True)
+
+    # Apply soft constraint preferences as secondary sorting tiebreakers if no override
     if req.prefer_shorter_execution:
         scored.sort(key=lambda x: (
+            1000 - x["override_new_priority"] if x["has_override"] else 0,
             -x["risk_score"] if req.objective == "max_risk" else -x["efficiency_score"],
             x["execution_time_minutes"]
-        ))
+        ), reverse=True)
 
     # === HARD CONSTRAINTS ===
     hard_constraint_violations = []
@@ -99,7 +121,8 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
     if req.include_security_test and security_tests:
         must_include_ids.add(security_tests[0]["test_case_id"])
 
-    # --- HARD CONSTRAINT: mandatory tests must not exceed time budget ---
+    # --- BUG 8: HARD CONSTRAINT VERIFICATION ---
+    # mandatory tests must not exceed time budget
     mandatory_total_time = sum(
         s["execution_time_minutes"] for s in scored if s["test_case_id"] in must_include_ids
     )
@@ -134,36 +157,31 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
             "excluded": [],
         }
 
-    # Add mandatory tests first (fits within budget, verified above)
+    # Add mandatory & override tests first within budget
+    # Overridden tests also get high priority inclusion
     for s in scored:
-        if s["test_case_id"] in must_include_ids:
-            total_time += s["execution_time_minutes"]
-            selected.append(s)
-
-    # Check remaining capacity warning (should not occur since we verified above)
-    if total_time > req.time_budget_minutes:
-        hard_constraint_violations.append(
-            f"WARNING: Mandatory tests alone require {total_time:.1f} min, exceeding budget of {req.time_budget_minutes:.1f} min. Cannot satisfy all hard constraints."
-        )
-
-    # Second pass: add remaining tests within budget
-    for s in scored:
-        if s["test_case_id"] not in must_include_ids:
+        if s["test_case_id"] in must_include_ids or s["has_override"]:
             if total_time + s["execution_time_minutes"] <= req.time_budget_minutes:
                 total_time += s["execution_time_minutes"]
                 selected.append(s)
             else:
                 deferred.append(s)
 
-    # Assign priorities
+    # Second pass: add remaining tests within budget
+    for s in scored:
+        if s not in selected and s not in deferred:
+            if total_time + s["execution_time_minutes"] <= req.time_budget_minutes:
+                total_time += s["execution_time_minutes"]
+                selected.append(s)
+            else:
+                deferred.append(s)
+
+    # Assign final priorities
     for i, s in enumerate(selected):
         s["priority"] = i + 1
 
     for i, s in enumerate(deferred):
         s["priority"] = len(selected) + i + 1
-
-    # Excluded = those that don't meet minimum criteria (none in this version)
-    # All deferred are potential execution candidates if more time becomes available
 
     # === SOFT CONSTRAINTS EVALUATION ===
     soft_constraints = []
@@ -219,6 +237,7 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
     selected_critical_defects = sum(s["historical_critical_defect_count"] for s in selected)
 
     return {
+        "status": "FEASIBLE",
         "objective": req.objective,
         "objective_label": "Maximum Risk Coverage" if req.objective == "max_risk" else "Maximum Risk per Minute",
         "time_budget_minutes": req.time_budget_minutes,
@@ -238,10 +257,10 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
 
 @router.post("/override")
 def override_priority(req: OverrideRequest, db: Session = Depends(get_db)):
-    # Verify authorization
+    # Verify authorization - Test Lead or Admin only
     user = require_role(req.token, ["test_lead", "admin"])
 
-    # Create audit log
+    # Create audit log entry
     override = OverrideLog(
         test_case_id=req.test_case_id,
         old_priority=req.old_priority,
@@ -265,7 +284,8 @@ def override_priority(req: OverrideRequest, db: Session = Depends(get_db)):
     }
 
 @router.get("/overrides")
-def get_overrides(db: Session = Depends(get_db)):
+def get_overrides(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     overrides = db.query(OverrideLog).order_by(OverrideLog.timestamp.desc()).all()
     return [{
         "id": o.id, "test_case_id": o.test_case_id,

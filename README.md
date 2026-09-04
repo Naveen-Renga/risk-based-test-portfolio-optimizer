@@ -49,7 +49,7 @@ Frontend application will open at `http://localhost:5173`.
 | 2 | 0:30 - 1:15 | **Tester** (`tester1`) | Log in as Tester. Open **Risk Analysis**. Point to the formula card and click a test case. | Show **multi-factor weighted formula** (0-10 normalized score). No black-box ML. |
 | 3 | 1:15 - 2:00 | **Test Lead** (`testlead`) | Open **Portfolio Optimizer**. Slide budget to **60 mins**. Switch between **Max Risk** and **Max Efficiency**. Perform a priority override on a test case with reason. | Demonstrate **dual objectives**, **hard/soft constraints**, **authorized overrides**, and **audit trail**. |
 | 4 | 2:00 - 2:30 | **Test Lead** (`testlead`) | Open **Event Simulation**. Click **Duplicate Event**, **Delayed Event**, and **Out-of-Order Event**. | Show **State Machine resilience**, **Idempotency keys**, and step-by-step state transition logs. |
-| 5 | 2:30 - 3:00 | **Test Lead** (`testlead`) | Open **Experiment Results**. Adjust time budget. Show **Security / Access**. | Highlight **Critical Defects / Min (CD/min)** metric (+75% improvement over FIFO baseline), **Error Analysis**, and **RBAC matrix**. |
+| 5 | 2:30 - 3:00 | **Test Lead** (`testlead`) | Open **Experiment Results**. Adjust time budget. Show **Security / Access**. | Highlight **Critical Defects / Min (CD/min)** metric (measured improvement over FIFO baseline, dynamically calculated from actual data), **Error Analysis**, and **RBAC matrix**. |
 
 ---
 
@@ -89,7 +89,7 @@ $$\text{CD / min} = \frac{\text{Critical Defects Detected}}{\text{Total Executio
 
 - **Baseline Strategy (FIFO):** Executes test cases in arbitrary index order (TC001, TC002, ...).
 - **Optimized Strategy (Risk-Based):** Executes test cases prioritized by risk density and constraints.
-- **Results:** Risk-based optimization achieves **+75% higher CD/min** efficiency under strict time budgets (e.g., 60 mins).
+- **Results:** The CD/min improvement is **measured dynamically** from actual test case data; the Experiment Results page displays the real calculated percentage for each selected time budget. No fixed improvement percentage is assumed or hardcoded.
 
 ---
 

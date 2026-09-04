@@ -34,8 +34,10 @@ export default function Portfolio() {
   }, [budget, objective, includeNetwork, includeSubmission, includeSecurity, preferHighRisk, preferRecentDefects, preferFrequentJourneys, preferShorterExecution]);
 
   const runOptimization = async () => {
+    if (!user?.token) return;
     try {
       const data = await api.runOptimizer({
+        token: user.token,
         time_budget_minutes: budget,
         objective: objective,
         include_network_test: includeNetwork,
@@ -53,8 +55,9 @@ export default function Portfolio() {
   };
 
   const loadOverrides = async () => {
+    if (!user?.token) return;
     try {
-      const logs = await api.getOverrides();
+      const logs = await api.getOverrides(user.token);
       setOverrideLogs(logs);
     } catch (err) {
       console.error(err);

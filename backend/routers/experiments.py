@@ -3,28 +3,33 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import TestCase
 from routers.risk import calculate_risk_score
+from routers.auth import require_role
 from pydantic import BaseModel
 from typing import Optional
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
 
 class ExperimentRequest(BaseModel):
+    token: str
     time_budget_minutes: float = 60.0
 
 @router.post("/run")
 def run_experiment(req: ExperimentRequest, db: Session = Depends(get_db)):
+    # BUG 3 FIX: Enforce tester or higher role
+    require_role(req.token, ["tester", "test_lead", "admin"])
+
     test_cases = db.query(TestCase).filter(TestCase.current_status == "Active").all()
 
-    # Calculate risk scores
+    # Calculate risk scores using real DefectHistory data (Bug 2 fix)
     scored = []
     for tc in test_cases:
-        risk = calculate_risk_score(tc)
+        risk = calculate_risk_score(tc, db=db)
         scored.append({
             "test_case_id": tc.test_case_id,
             "name": tc.name,
             "critical_user_journey": tc.critical_user_journey,
             "execution_time_minutes": tc.execution_time_minutes,
-            "historical_critical_defect_count": tc.historical_critical_defect_count,
+            "historical_critical_defect_count": risk["actual_critical_defect_count"],
             "risk_score": risk["risk_score"],
             "priority_category": risk["priority_category"],
         })
@@ -57,18 +62,17 @@ def run_experiment(req: ExperimentRequest, db: Session = Depends(get_db)):
 
     optimized_cd_per_min = round(optimized_critical_defects / max(optimized_time, 0.1), 4)
 
-    # ============ IMPROVEMENT ============
+    # ============ IMPROVEMENT (Dynamic calculation - Bug 1) ============
     if baseline_cd_per_min > 0:
         improvement_percent = round(((optimized_cd_per_min - baseline_cd_per_min) / baseline_cd_per_min) * 100, 1)
     else:
         improvement_percent = 0.0
 
     # ============ ERROR ANALYSIS ============
-    # Find cases where optimization may miss defects
+    missed_by_optimizer = []
     all_ids_optimized = set(tc["test_case_id"] for tc in optimized_selected)
     all_ids_baseline = set(tc["test_case_id"] for tc in baseline_selected)
 
-    missed_by_optimizer = []
     for tc in scored:
         if tc["test_case_id"] in all_ids_baseline and tc["test_case_id"] not in all_ids_optimized:
             if tc["historical_critical_defect_count"] > 0:
@@ -86,7 +90,6 @@ def run_experiment(req: ExperimentRequest, db: Session = Depends(get_db)):
                     "analysis": f"This high-risk test ({tc['risk_score']}) with {tc['historical_critical_defect_count']} critical defects was missed by baseline FIFO ordering but caught by the optimizer."
                 })
 
-    # Limitation discussion
     limitations = [
         {
             "title": "Historical Bias",

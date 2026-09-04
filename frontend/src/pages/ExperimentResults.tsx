@@ -1,20 +1,23 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../AuthContext';
 import { api } from '../api';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 
 export default function ExperimentResults() {
+  const { user } = useAuth();
   const [budget, setBudget] = useState(60);
   const [expData, setExpData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     runExperiment();
-  }, [budget]);
+  }, [budget, user]);
 
   const runExperiment = async () => {
+    if (!user?.token) return;
     setLoading(true);
     try {
-      const data = await api.runExperiment(budget);
+      const data = await api.runExperiment(budget, user.token);
       setExpData(data);
     } catch (err) {
       console.error(err);

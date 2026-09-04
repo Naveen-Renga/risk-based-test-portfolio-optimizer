@@ -50,7 +50,7 @@ def dashboard_stats():
     test_cases_list = db.query(TestCase).all()
     defects = db.query(DefectHistory).all()
 
-    risk_scores = [calculate_risk_score(tc) for tc in test_cases_list]
+    risk_scores = [calculate_risk_score(tc, db=db) for tc in test_cases_list]
 
     critical_count = sum(1 for r in risk_scores if r["priority_category"] == "Critical")
     high_count = sum(1 for r in risk_scores if r["priority_category"] == "High")

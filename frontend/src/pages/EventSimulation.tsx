@@ -1,14 +1,17 @@
 import { useState } from 'react';
+import { useAuth } from '../AuthContext';
 import { api } from '../api';
 
 export default function EventSimulation() {
+  const { user } = useAuth();
   const [simulationResult, setSimulationResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   const runDuplicateSimulation = async () => {
+    if (!user?.token) return;
     setLoading(true);
     try {
-      const res = await api.simulateDuplicate();
+      const res = await api.simulateDuplicate(user.token);
       setSimulationResult(res);
     } catch (err) {
       console.error(err);
@@ -18,9 +21,10 @@ export default function EventSimulation() {
   };
 
   const runDelayedSimulation = async () => {
+    if (!user?.token) return;
     setLoading(true);
     try {
-      const res = await api.simulateDelayed();
+      const res = await api.simulateDelayed(user.token);
       setSimulationResult(res);
     } catch (err) {
       console.error(err);
@@ -30,9 +34,10 @@ export default function EventSimulation() {
   };
 
   const runOutOfOrderSimulation = async () => {
+    if (!user?.token) return;
     setLoading(true);
     try {
-      const res = await api.simulateOutOfOrder();
+      const res = await api.simulateOutOfOrder(user.token);
       setSimulationResult(res);
     } catch (err) {
       console.error(err);

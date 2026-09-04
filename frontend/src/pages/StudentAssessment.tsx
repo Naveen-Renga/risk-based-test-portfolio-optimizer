@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../AuthContext';
 import { api } from '../api';
 
@@ -14,9 +14,13 @@ export default function StudentAssessment() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [timeLeft, setTimeLeft] = useState(0);
-  const [autosaveStatus, setAutosaveStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
+  const [autosaveStatus, setAutosaveStatus] = useState<'saved' | 'saving' | 'queued' | 'syncing' | 'idle'>('idle');
   const [isNetworkConnected, setIsNetworkConnected] = useState(true);
   const [resultData, setResultData] = useState<any>(null);
+
+  // BUG 6 FIX: Queue unsaved offline answers locally
+  const offlineQueueRef = useRef<Record<number, string>>({});
+  const [pendingQueueCount, setPendingQueueCount] = useState(0);
 
   useEffect(() => {
     loadAssessments();
@@ -39,6 +43,13 @@ export default function StudentAssessment() {
     return () => clearInterval(timer);
   }, [step, timeLeft]);
 
+  // BUG 6 FIX: Auto-flush offline queue whenever network switches from disconnected to connected
+  useEffect(() => {
+    if (isNetworkConnected && submissionId && user && Object.keys(offlineQueueRef.current).length > 0) {
+      flushOfflineQueue();
+    }
+  }, [isNetworkConnected]);
+
   const loadAssessments = async () => {
     try {
       const data = await api.getAssessments();
@@ -56,50 +67,94 @@ export default function StudentAssessment() {
   const startExam = async () => {
     if (!user || !selectedAssessment) return;
     try {
+      // BUG 7 FIX: Pass user.token to startAssessment
       const [qs, sub] = await Promise.all([
         api.getQuestions(selectedAssessment.id),
-        api.startAssessment(user.user_id, selectedAssessment.id),
+        api.startAssessment(user.user_id, selectedAssessment.id, user.token),
       ]);
       setQuestions(qs);
       setSubmissionId(sub.submission_id);
       setTimeLeft(selectedAssessment.duration_minutes * 60);
       setAnswers({});
+      offlineQueueRef.current = {};
+      setPendingQueueCount(0);
       setCurrentIndex(0);
       setStep('exam');
+    } catch (err: any) {
+      alert(err.message || 'Error starting assessment');
+    }
+  };
+
+  const flushOfflineQueue = async () => {
+    if (!submissionId || !user) return;
+    const queue = { ...offlineQueueRef.current };
+    const queueEntries = Object.entries(queue);
+    if (queueEntries.length === 0) return;
+
+    setAutosaveStatus('syncing');
+    try {
+      for (const [qIdStr, opt] of queueEntries) {
+        const qId = Number(qIdStr);
+        await api.saveAnswer(submissionId, qId, opt, user.token);
+        delete offlineQueueRef.current[qId];
+      }
+      setPendingQueueCount(Object.keys(offlineQueueRef.current).length);
+      setAutosaveStatus('saved');
+      setTimeout(() => setAutosaveStatus('idle'), 2500);
     } catch (err) {
-      alert('Error starting assessment');
+      console.error('Failed to flush offline queue:', err);
+      setAutosaveStatus('queued');
     }
   };
 
   const handleSelectAnswer = async (questionId: number, option: string) => {
-    if (!isNetworkConnected) {
-      alert('Network Disconnected! Cannot sync answer right now. Local state updated.');
-    }
     const newAnswers = { ...answers, [questionId]: option };
     setAnswers(newAnswers);
 
-    if (submissionId && isNetworkConnected) {
+    if (!isNetworkConnected) {
+      // BUG 6 FIX: Queue locally when network is disconnected
+      offlineQueueRef.current[questionId] = option;
+      const count = Object.keys(offlineQueueRef.current).length;
+      setPendingQueueCount(count);
+      setAutosaveStatus('queued');
+      return;
+    }
+
+    if (submissionId && user) {
       setAutosaveStatus('saving');
       try {
-        await api.saveAnswer(submissionId, questionId, option);
+        await api.saveAnswer(submissionId, questionId, option, user.token);
         setAutosaveStatus('saved');
         setTimeout(() => setAutosaveStatus('idle'), 2000);
       } catch (err) {
-        console.error('Autosave failed:', err);
+        console.error('Autosave failed, queuing locally:', err);
+        offlineQueueRef.current[questionId] = option;
+        setPendingQueueCount(Object.keys(offlineQueueRef.current).length);
+        setAutosaveStatus('queued');
       }
     }
   };
 
+  const handleToggleNetwork = () => {
+    const nextState = !isNetworkConnected;
+    setIsNetworkConnected(nextState);
+  };
+
   const handleSubmit = async () => {
-    if (!submissionId) return;
+    if (!submissionId || !user) return;
     if (!isNetworkConnected) {
       alert('Cannot submit while network is disconnected! Please restore network connection first.');
       return;
     }
 
+    // Flush any pending queued answers before final submit
+    if (Object.keys(offlineQueueRef.current).length > 0) {
+      await flushOfflineQueue();
+    }
+
     try {
-      await api.submitAssessment(submissionId);
-      const fullSub = await api.getSubmission(submissionId);
+      await api.submitAssessment(submissionId, user.token);
+      const fullSub = await api.getSubmission(submissionId, user.token);
       setResultData(fullSub);
       setStep('result');
     } catch (err: any) {
@@ -160,8 +215,8 @@ export default function StudentAssessment() {
             <ul style={{ paddingLeft: '20px', color: '#475569' }}>
               <li><strong>Time Limit:</strong> {selectedAssessment?.duration_minutes} minutes. Timer starts immediately upon launch.</li>
               <li><strong>Autosave:</strong> Every answer selection is automatically saved to the cloud.</li>
-              <li><strong>Network Resilience:</strong> If your network drops, your answers stay in local memory until reconnected.</li>
-              <li><strong>Single Session:</strong> Multiple concurrent logins for the same exam are restricted.</li>
+              <li><strong>Network Resilience & Offline Resync:</strong> If network drops, answers are safely queued locally and automatically synchronized upon reconnect.</li>
+              <li><strong>Ownership & Security:</strong> All exam data is strictly tied to your student account context.</li>
               <li><strong>Final Submission:</strong> Click "Submit Assessment" when complete. Auto-submits on timer expiry.</li>
             </ul>
           </div>
@@ -187,14 +242,14 @@ export default function StudentAssessment() {
           {isNetworkConnected ? (
             <span>🟢 Network Status: Connected (Autosave Active)</span>
           ) : (
-            <span>🔴 Network Status: DISCONNECTED (Simulating Network Interruption)</span>
+            <span>🔴 Network Status: DISCONNECTED (Simulating Network Interruption — {pendingQueueCount} answers queued)</span>
           )}
           <button
             className="btn btn-sm btn-secondary"
             style={{ marginLeft: '12px' }}
-            onClick={() => setIsNetworkConnected(!isNetworkConnected)}
+            onClick={handleToggleNetwork}
           >
-            Simulate {isNetworkConnected ? 'Network Disconnect' : 'Network Reconnect'}
+            Simulate {isNetworkConnected ? 'Network Disconnect' : 'Network Reconnect & Resync'}
           </button>
         </div>
 
@@ -205,7 +260,9 @@ export default function StudentAssessment() {
               <h3 style={{ fontSize: '16px', fontWeight: 700 }}>{selectedAssessment?.title}</h3>
               <span className="autosave-indicator">
                 {autosaveStatus === 'saving' && '⏳ Autosaving answer...'}
-                {autosaveStatus === 'saved' && '✅ Answer saved'}
+                {autosaveStatus === 'syncing' && '🔄 Resynchronizing offline queued answers to cloud...'}
+                {autosaveStatus === 'queued' && `⚠️ Offline Mode: ${pendingQueueCount} answers queued locally`}
+                {autosaveStatus === 'saved' && '✅ All answers synchronized & saved'}
                 {autosaveStatus === 'idle' && `Answers: ${answeredCount}/${questions.length} saved`}
               </span>
             </div>

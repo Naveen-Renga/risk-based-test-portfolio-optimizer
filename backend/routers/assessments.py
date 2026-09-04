@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Assessment, Question, Submission
@@ -43,10 +43,17 @@ def get_questions(assessment_id: int, db: Session = Depends(get_db)):
 class StartRequest(BaseModel):
     user_id: int
     assessment_id: int
+    token: str
 
 @router.post("/start")
 def start_assessment(req: StartRequest, db: Session = Depends(get_db)):
-    # Check for existing in-progress submission
+    # BUG 7 FIX: Verify token & ownership
+    session_user = sessions.get(req.token)
+    if not session_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if session_user["user_id"] != req.user_id and session_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden: You cannot start an assessment for another student")
+
     existing = db.query(Submission).filter(
         Submission.user_id == req.user_id,
         Submission.assessment_id == req.assessment_id,
@@ -70,11 +77,11 @@ class SaveAnswerRequest(BaseModel):
     submission_id: int
     question_id: int
     answer: str
-    token: str  # Required for ownership verification
+    token: str
 
 @router.post("/save-answer")
 def save_answer(req: SaveAnswerRequest, db: Session = Depends(get_db)):
-    # --- OWNERSHIP AUTHORIZATION CHECK ---
+    # BUG 7 FIX: Ownership authorization check
     session_user = sessions.get(req.token)
     if not session_user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -83,12 +90,8 @@ def save_answer(req: SaveAnswerRequest, db: Session = Depends(get_db)):
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    # Verify the authenticated user owns this submission
-    if submission.user_id != session_user["user_id"]:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Forbidden: You do not own submission {req.submission_id}"
-        )
+    if submission.user_id != session_user["user_id"] and session_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail=f"Forbidden: You do not own submission {req.submission_id}")
 
     if submission.status == "submitted":
         raise HTTPException(status_code=400, detail="Assessment already submitted")
@@ -101,16 +104,25 @@ def save_answer(req: SaveAnswerRequest, db: Session = Depends(get_db)):
 
 class SubmitRequest(BaseModel):
     submission_id: int
+    token: str
 
 @router.post("/submit")
 def submit_assessment(req: SubmitRequest, db: Session = Depends(get_db)):
+    # BUG 7 FIX: Ownership verification
+    session_user = sessions.get(req.token)
+    if not session_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     submission = db.query(Submission).filter(Submission.id == req.submission_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
+
+    if submission.user_id != session_user["user_id"] and session_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden: You cannot submit another user's assessment")
+
     if submission.status == "submitted":
         raise HTTPException(status_code=400, detail="Already submitted")
 
-    # Calculate score
     answers = json.loads(submission.answers) if submission.answers else {}
     questions = db.query(Question).filter(Question.assessment_id == submission.assessment_id).all()
 
@@ -136,10 +148,17 @@ def submit_assessment(req: SubmitRequest, db: Session = Depends(get_db)):
     }
 
 @router.get("/submission/{submission_id}")
-def get_submission(submission_id: int, db: Session = Depends(get_db)):
+def get_submission(submission_id: int, token: str, db: Session = Depends(get_db)):
+    session_user = sessions.get(token)
+    if not session_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
+
+    if submission.user_id != session_user["user_id"] and session_user["role"] not in ["admin", "test_lead"]:
+        raise HTTPException(status_code=403, detail="Forbidden: You cannot view another student's submission result")
 
     questions = db.query(Question).filter(Question.assessment_id == submission.assessment_id).all()
     answers = json.loads(submission.answers) if submission.answers else {}
@@ -169,7 +188,13 @@ def get_submission(submission_id: int, db: Session = Depends(get_db)):
     }
 
 @router.get("/user/{user_id}/submissions")
-def get_user_submissions(user_id: int, db: Session = Depends(get_db)):
+def get_user_submissions(user_id: int, token: str, db: Session = Depends(get_db)):
+    session_user = sessions.get(token)
+    if not session_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if session_user["user_id"] != user_id and session_user["role"] not in ["admin", "test_lead"]:
+        raise HTTPException(status_code=403, detail="Forbidden: You cannot view another user's submission history")
+
     submissions = db.query(Submission).filter(Submission.user_id == user_id).all()
     result = []
     for s in submissions:

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models import EventLog
+from routers.auth import require_role
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
@@ -9,7 +10,8 @@ import uuid
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
-# In-memory state machine for simulation
+# BUG 3 FIX: Enforce tester or higher role on all event simulation endpoints
+
 class AssessmentStateMachine:
     VALID_TRANSITIONS = {
         "IDLE": ["START_EXAM"],
@@ -42,7 +44,6 @@ class AssessmentStateMachine:
         # State validation
         valid_events = self.VALID_TRANSITIONS.get(self.state, [])
 
-        # Special handling for state transitions
         if event_type == "START_EXAM" and self.state == "IDLE":
             self.state = "STARTED"
             result["status"] = "PROCESSED"
@@ -97,11 +98,13 @@ class EventInput(BaseModel):
     payload: Optional[dict] = None
 
 class SimulationRequest(BaseModel):
+    token: str
     events: List[EventInput]
     scenario_name: str = "Custom Simulation"
 
 @router.post("/simulate")
 def simulate_events(req: SimulationRequest, db: Session = Depends(get_db)):
+    require_role(req.token, ["tester", "test_lead", "admin"])
     machine = AssessmentStateMachine()
     results = []
 
@@ -110,7 +113,6 @@ def simulate_events(req: SimulationRequest, db: Session = Depends(get_db)):
         result = machine.process_event(event.event_type, eid, event.payload)
         results.append(result)
 
-        # Log to database
         log = EventLog(
             event_id=eid,
             event_type=event.event_type,
@@ -121,7 +123,6 @@ def simulate_events(req: SimulationRequest, db: Session = Depends(get_db)):
         db.add(log)
 
     db.commit()
-
     state_corrupted = machine.state not in ["IDLE", "STARTED", "ANSWERING", "SUBMITTED", "DISCONNECTED"]
 
     return {
@@ -137,9 +138,10 @@ def simulate_events(req: SimulationRequest, db: Session = Depends(get_db)):
     }
 
 @router.post("/simulate/duplicate")
-def simulate_duplicate(db: Session = Depends(get_db)):
-    """Pre-built scenario: Duplicate answer event"""
+def simulate_duplicate(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     req = SimulationRequest(
+        token=token,
         scenario_name="Duplicate Answer Event",
         events=[
             EventInput(event_type="START_EXAM", event_id="EVT001", sequence_number=1),
@@ -151,9 +153,10 @@ def simulate_duplicate(db: Session = Depends(get_db)):
     return simulate_events(req, db)
 
 @router.post("/simulate/delayed")
-def simulate_delayed(db: Session = Depends(get_db)):
-    """Pre-built scenario: Delayed save after submission"""
+def simulate_delayed(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     req = SimulationRequest(
+        token=token,
         scenario_name="Delayed Save After Submission",
         events=[
             EventInput(event_type="START_EXAM", event_id="EVT010", sequence_number=1),
@@ -165,9 +168,10 @@ def simulate_delayed(db: Session = Depends(get_db)):
     return simulate_events(req, db)
 
 @router.post("/simulate/out-of-order")
-def simulate_out_of_order(db: Session = Depends(get_db)):
-    """Pre-built scenario: Out-of-order events"""
+def simulate_out_of_order(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     req = SimulationRequest(
+        token=token,
         scenario_name="Out-of-Order Assessment Events",
         events=[
             EventInput(event_type="ANSWER_SAVED", event_id="EVT020", sequence_number=3, payload={"question_id": "Q1", "answer": "A"}),
@@ -178,7 +182,8 @@ def simulate_out_of_order(db: Session = Depends(get_db)):
     return simulate_events(req, db)
 
 @router.get("/logs")
-def get_event_logs(db: Session = Depends(get_db)):
+def get_event_logs(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     logs = db.query(EventLog).order_by(EventLog.timestamp.desc()).limit(100).all()
     return [{
         "id": l.id, "event_id": l.event_id, "event_type": l.event_type,

@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../AuthContext';
 import { api } from '../api';
 
 export default function TestCases() {
+  const { user } = useAuth();
   const [testCases, setTestCases] = useState<any[]>([]);
   const [riskScores, setRiskScores] = useState<Record<string, any>>({});
   const [filterModule, setFilterModule] = useState('All');
@@ -11,10 +13,11 @@ export default function TestCases() {
 
   useEffect(() => {
     async function load() {
+      if (!user?.token) return;
       try {
         const [tcs, risks] = await Promise.all([
-          api.getTestCases(),
-          api.getRiskScores()
+          api.getTestCases(user.token),
+          api.getRiskScores(user.token)
         ]);
         setTestCases(tcs);
 
@@ -28,7 +31,7 @@ export default function TestCases() {
       }
     }
     load();
-  }, []);
+  }, [user]);
 
   if (loading) return <div className="loading">Loading 35+ assessment platform test cases...</div>;
 

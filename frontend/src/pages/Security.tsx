@@ -11,14 +11,15 @@ export default function Security() {
 
   useEffect(() => {
     loadSecurityData();
-  }, []);
+  }, [user]);
 
   const loadSecurityData = async () => {
+    if (!user?.token) return;
     setLoading(true);
     try {
       const [demo, sLogs, perms] = await Promise.all([
         api.securityDemo(),
-        api.getSecurityLogs(),
+        api.getSecurityLogs(user.token),
         api.getPermissions()
       ]);
       setDemoResults(demo);
@@ -35,7 +36,7 @@ export default function Security() {
     if (!user) return;
     try {
       const res = await api.securityCheck(user.token, action);
-      alert(`Security Check Result: ${res.result}\nUser: ${res.user} (${res.role})\nAction: ${res.action}\nReason: ${res.reason}`);
+      alert(`Security Check Result: ${res.result} (HTTP ${res.http_status})\nUser: ${res.user} (${res.role})\nAction: ${res.action}\nReason: ${res.reason}`);
       loadSecurityData();
     } catch (err: any) {
       alert(err.message || 'Check failed');
@@ -48,8 +49,8 @@ export default function Security() {
     <div>
       <div className="page-header flex-between">
         <div>
-          <h1>Security Controls & Secure Defaults</h1>
-          <p>Demonstrating Role-Based Access Control (RBAC), unauthorized action prevention, and audit logging.</p>
+          <h1>Security Controls & Real API Authorization</h1>
+          <p>Demonstrating Role-Based Access Control (RBAC), Default-Deny backend enforcement, and real HTTP sub-request testing.</p>
         </div>
         <span className="synthetic-label">Security Engine</span>
       </div>
@@ -104,31 +105,43 @@ export default function Security() {
         </div>
       </div>
 
-      {/* Automated Security Demo Scenarios */}
+      {/* Automated Real Security Demo Scenarios */}
       <div className="card" style={{ marginBottom: '24px' }}>
         <div className="flex-between" style={{ marginBottom: '12px' }}>
-          <h3 className="card-title">🧪 Automated Security Misuse & Default Deny Suite</h3>
-          <span className="badge pass">{demoResults?.passed} / {demoResults?.total_scenarios} Tests Passed</span>
+          <div>
+            <h3 className="card-title">🧪 Live HTTP Security Authorization Suite (Real TestClient Subrequests)</h3>
+            <p style={{ color: '#64748b', fontSize: '12px', marginTop: '2px' }}>
+              Each scenario sends a real HTTP call to protected backend endpoints and verifies HTTP status codes (200, 401, 403).
+            </p>
+          </div>
+          <span className="badge pass">{demoResults?.passed} / {demoResults?.total_scenarios} Real HTTP Tests Passed</span>
         </div>
 
         <div className="table-container">
           <table>
             <thead>
               <tr>
-                <th>Role Attempting Action</th>
-                <th>Action Attempted</th>
-                <th>Expected Result</th>
-                <th>Actual Result</th>
-                <th>Enforcement Status</th>
+                <th>Role Context</th>
+                <th>Test Type & Endpoint Called</th>
+                <th>Expected HTTP</th>
+                <th>Actual HTTP Status</th>
+                <th>Security Verdict</th>
               </tr>
             </thead>
             <tbody>
               {demoResults?.results?.map((res: any, idx: number) => (
                 <tr key={idx}>
                   <td><span className="badge info">{res.role}</span></td>
-                  <td><code>{res.action}</code></td>
-                  <td><span className={`badge ${res.expected === 'ALLOWED' ? 'pass' : 'fail'}`}>{res.expected}</span></td>
-                  <td><span className={`badge ${res.actual === 'ALLOWED' ? 'pass' : 'fail'}`}>{res.actual}</span></td>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{res.test_type}</div>
+                    <code style={{ fontSize: '11px', color: '#64748b' }}>{res.endpoint}</code>
+                  </td>
+                  <td><span className={`badge ${res.expected_status === 200 ? 'pass' : 'fail'}`}>HTTP {res.expected_status}</span></td>
+                  <td>
+                    <span className={`badge ${res.actual_status === 200 ? 'pass' : 'fail'}`}>
+                      HTTP {res.actual_status} ({res.actual_status === 200 ? 'OK' : res.actual_status === 401 ? 'Unauthorized' : 'Forbidden'})
+                    </span>
+                  </td>
                   <td>
                     {res.passed ? (
                       <span style={{ color: '#16a34a', fontWeight: 600 }}>✅ PASS (Secured)</span>
@@ -150,25 +163,27 @@ export default function Security() {
           <table>
             <thead>
               <tr>
-                <th>User</th>
+                <th>Timestamp</th>
+                <th>User Context</th>
                 <th>Role</th>
                 <th>Action Attempted</th>
-                <th>Result</th>
-                <th>Reason / Detail</th>
-                <th>Timestamp</th>
+                <th>Verdict</th>
+                <th>HTTP Enforcement Details</th>
               </tr>
             </thead>
             <tbody>
-              {logs.map((l: any) => (
-                <tr key={l.id}>
-                  <td><strong>{l.user}</strong></td>
-                  <td><span className="badge info">{l.role}</span></td>
-                  <td><code>{l.action}</code></td>
+              {logs.map((log: any) => (
+                <tr key={log.id}>
+                  <td style={{ fontSize: '12px' }}>{log.timestamp}</td>
+                  <td><strong>{log.user}</strong></td>
+                  <td><span className="badge info">{log.role}</span></td>
+                  <td><code>{log.action}</code></td>
                   <td>
-                    <span className={`badge ${l.result === 'ALLOWED' ? 'pass' : 'fail'}`}>{l.result}</span>
+                    <span className={`badge ${log.result === 'ALLOWED' ? 'pass' : 'fail'}`}>
+                      {log.result}
+                    </span>
                   </td>
-                  <td style={{ fontSize: '11px', color: '#475569' }}>{l.reason}</td>
-                  <td style={{ fontSize: '11px' }}>{l.timestamp}</td>
+                  <td style={{ fontSize: '11px', color: '#475569', maxWidth: '300px' }}>{log.reason}</td>
                 </tr>
               ))}
             </tbody>

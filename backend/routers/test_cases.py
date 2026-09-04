@@ -2,13 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models import TestCase, DefectHistory
-from pydantic import BaseModel
-from typing import Optional, List
+from routers.auth import require_role
 
 router = APIRouter(prefix="/api/test-cases", tags=["test_cases"])
 
+# BUG 3 FIX: Require tester or higher role for test case & defect endpoints
+
 @router.get("/")
-def get_test_cases(db: Session = Depends(get_db)):
+def get_test_cases(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     tcs = db.query(TestCase).all()
     return [{
         "id": tc.id, "test_case_id": tc.test_case_id, "name": tc.name,
@@ -23,7 +25,8 @@ def get_test_cases(db: Session = Depends(get_db)):
     } for tc in tcs]
 
 @router.get("/{test_case_id}")
-def get_test_case(test_case_id: str, db: Session = Depends(get_db)):
+def get_test_case(test_case_id: str, token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     tc = db.query(TestCase).filter(TestCase.test_case_id == test_case_id).first()
     if not tc:
         raise HTTPException(status_code=404, detail="Test case not found")
@@ -40,7 +43,8 @@ def get_test_case(test_case_id: str, db: Session = Depends(get_db)):
     }
 
 @router.get("/defects/history")
-def get_defect_history(db: Session = Depends(get_db)):
+def get_defect_history(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     defects = db.query(DefectHistory).all()
     return [{
         "id": d.id, "test_case_id": d.test_case_id, "defect_id": d.defect_id,
@@ -50,7 +54,8 @@ def get_defect_history(db: Session = Depends(get_db)):
     } for d in defects]
 
 @router.get("/defects/summary")
-def get_defect_summary(db: Session = Depends(get_db)):
+def get_defect_summary(token: str, db: Session = Depends(get_db)):
+    require_role(token, ["tester", "test_lead", "admin"])
     defects = db.query(DefectHistory).all()
     by_severity = {}
     by_module = {}

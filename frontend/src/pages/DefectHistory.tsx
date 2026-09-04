@@ -1,17 +1,20 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../AuthContext';
 import { api } from '../api';
 
 export default function DefectHistory() {
+  const { user } = useAuth();
   const [defects, setDefects] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
+      if (!user?.token) return;
       try {
         const [dList, dSum] = await Promise.all([
-          api.getDefectHistory(),
-          api.getDefectSummary()
+          api.getDefectHistory(user.token),
+          api.getDefectSummary(user.token)
         ]);
         setDefects(dList);
         setSummary(dSum);
@@ -22,7 +25,7 @@ export default function DefectHistory() {
       }
     }
     load();
-  }, []);
+  }, [user]);
 
   if (loading) return <div className="loading">Loading historical defect records...</div>;
 
