@@ -70,6 +70,13 @@ def require_role(token: str, allowed_roles: list):
     return user
 
 @router.get("/users")
-def get_users(db: Session = Depends(get_db)):
+def get_users(token: str, db: Session = Depends(get_db)):
+    # Require valid session
+    if token not in sessions:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # Require admin role
+    user = sessions[token]
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Access denied: Admin role required")
     users = db.query(User).all()
     return [{"id": u.id, "username": u.username, "full_name": u.full_name, "role": u.role} for u in users]

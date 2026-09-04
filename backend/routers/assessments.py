@@ -5,6 +5,7 @@ from models import Assessment, Question, Submission
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+from routers.auth import sessions
 import json
 
 router = APIRouter(prefix="/api/assessments", tags=["assessments"])
@@ -69,12 +70,26 @@ class SaveAnswerRequest(BaseModel):
     submission_id: int
     question_id: int
     answer: str
+    token: str  # Required for ownership verification
 
 @router.post("/save-answer")
 def save_answer(req: SaveAnswerRequest, db: Session = Depends(get_db)):
+    # --- OWNERSHIP AUTHORIZATION CHECK ---
+    session_user = sessions.get(req.token)
+    if not session_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     submission = db.query(Submission).filter(Submission.id == req.submission_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
+
+    # Verify the authenticated user owns this submission
+    if submission.user_id != session_user["user_id"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Forbidden: You do not own submission {req.submission_id}"
+        )
+
     if submission.status == "submitted":
         raise HTTPException(status_code=400, detail="Assessment already submitted")
 

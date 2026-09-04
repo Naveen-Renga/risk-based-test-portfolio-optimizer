@@ -16,7 +16,7 @@ export const api = {
   // Auth
   login: (username: string, password: string) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-  getUsers: () => request('/auth/users'),
+  getUsers: (token: string) => request(`/auth/users?token=${encodeURIComponent(token)}`),
 
   // Dashboard
   getDashboardStats: () => request('/dashboard/stats'),
@@ -27,8 +27,8 @@ export const api = {
   getQuestions: (id: number) => request(`/assessments/${id}/questions`),
   startAssessment: (userId: number, assessmentId: number) =>
     request('/assessments/start', { method: 'POST', body: JSON.stringify({ user_id: userId, assessment_id: assessmentId }) }),
-  saveAnswer: (submissionId: number, questionId: number, answer: string) =>
-    request('/assessments/save-answer', { method: 'POST', body: JSON.stringify({ submission_id: submissionId, question_id: questionId, answer }) }),
+  saveAnswer: (submissionId: number, questionId: number, answer: string, token: string) =>
+    request('/assessments/save-answer', { method: 'POST', body: JSON.stringify({ submission_id: submissionId, question_id: questionId, answer, token }) }),
   submitAssessment: (submissionId: number) =>
     request('/assessments/submit', { method: 'POST', body: JSON.stringify({ submission_id: submissionId }) }),
   getSubmission: (id: number) => request(`/assessments/submission/${id}`),

@@ -90,7 +90,7 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
     excluded = []
     total_time = 0.0
 
-    # First pass: add mandatory and hard-constraint tests
+    # First pass: collect mandatory and hard-constraint test IDs
     must_include_ids = set(mandatory_ids)
     if req.include_network_test and network_tests:
         must_include_ids.add(network_tests[0]["test_case_id"])
@@ -99,13 +99,48 @@ def run_optimizer(req: OptimizerRequest, db: Session = Depends(get_db)):
     if req.include_security_test and security_tests:
         must_include_ids.add(security_tests[0]["test_case_id"])
 
-    # Add mandatory tests first
+    # --- HARD CONSTRAINT: mandatory tests must not exceed time budget ---
+    mandatory_total_time = sum(
+        s["execution_time_minutes"] for s in scored if s["test_case_id"] in must_include_ids
+    )
+
+    if mandatory_total_time > req.time_budget_minutes:
+        # Return UNFEASIBLE — do NOT return an over-budget portfolio
+        return {
+            "status": "UNFEASIBLE",
+            "objective": req.objective,
+            "objective_label": "Maximum Risk Coverage" if req.objective == "max_risk" else "Maximum Risk per Minute",
+            "time_budget_minutes": req.time_budget_minutes,
+            "mandatory_execution_time_required": round(mandatory_total_time, 1),
+            "shortfall_minutes": round(mandatory_total_time - req.time_budget_minutes, 1),
+            "reason": (
+                f"Cannot satisfy constraints: mandatory tests require {mandatory_total_time:.1f} min "
+                f"but budget is only {req.time_budget_minutes:.1f} min. "
+                f"Please increase the time budget to at least {mandatory_total_time:.1f} min."
+            ),
+            "total_test_cases": len(scored),
+            "selected_count": 0,
+            "deferred_count": len(scored),
+            "excluded_count": 0,
+            "total_execution_time": 0.0,
+            "risk_coverage_percent": 0.0,
+            "critical_defect_coverage_percent": 0.0,
+            "hard_constraint_violations": [
+                f"UNFEASIBLE: Mandatory tests require {mandatory_total_time:.1f} min, exceeding budget of {req.time_budget_minutes:.1f} min."
+            ],
+            "soft_constraints": [],
+            "selected": [],
+            "deferred": scored,
+            "excluded": [],
+        }
+
+    # Add mandatory tests first (fits within budget, verified above)
     for s in scored:
         if s["test_case_id"] in must_include_ids:
             total_time += s["execution_time_minutes"]
             selected.append(s)
 
-    # Check hard time limit
+    # Check remaining capacity warning (should not occur since we verified above)
     if total_time > req.time_budget_minutes:
         hard_constraint_violations.append(
             f"WARNING: Mandatory tests alone require {total_time:.1f} min, exceeding budget of {req.time_budget_minutes:.1f} min. Cannot satisfy all hard constraints."
